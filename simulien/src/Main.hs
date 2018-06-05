@@ -3,15 +3,18 @@ module Main where
 import qualified Data.Map.Strict as Map
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 import Data.Maybe (catMaybes)
+import System.Random (RandomGen, mkStdGen)
+import System.Random.Shuffle (shuffle')
 
-data Direction    = North | East | South | West deriving (Show)
+data Direction    = North | East | South | West deriving (Show, Eq, Ord)
 type CityName     = T.Text
 type Neighbour    = (Direction, CityName)
 type Neighborhood = [Neighbour]
 type Alien        = Int
 type Population   = [Alien]
-data City         = City CityName Population Neighborhood deriving (Show)
+data City         = City CityName Population Neighborhood deriving (Show, Eq, Ord)
 type CityMap      = Map.Map CityName City
 
 -- | Simulates an invasion of an alien population with max number of individual alien moves.
@@ -19,17 +22,15 @@ type CityMap      = Map.Map CityName City
 simulate :: Int -> CityMap -> CityMap
 simulate = undefined
 
-populate :: Population -> CityMap -> CityMap
-populate p m = snd $ foldr pop (p, Map.empty) m where
-  pop (City name p' n) (ps, m')
-    | not $ null ps = (tail ps, Map.insert name (City name (head ps : p') n) m')
-    | otherwise     = (ps,      Map.insert name (City name p' n) m')
-
-populate' :: Population -> CityMap -> CityMap
-populate' p m = Map.fromList $ zip names cities where
-  cities = zipWith pop p $ Map.elems m
-  pop alien (City n p' ns) = City n (alien:p') ns
-  names  = cityName <$> cities
+-- | Populates a CityMap with the given Population placed at random cities.
+populate :: RandomGen gen => gen -> Population -> CityMap -> CityMap
+populate gen p m = Map.fromListWith merge $ zip names populated where
+  merge (City name lp ns) (City _ rp _) = (City name (lp ++ rp) ns)
+  names = cityName <$> populated
+  populated = zipWith join population cities
+  population = [[alien] | alien <- p] ++ replicate (length m - length p) []
+  join aliens (City n p' ns) = City n (aliens ++ p') ns
+  cities = cycle $ shuffle' (Map.elems m) (length m) gen
 
 cityName :: City -> CityName
 cityName (City n _ _ ) = n
