@@ -29,12 +29,9 @@ type CityMap      = Map.Map CityName City
 simulate :: RandomGen gen => gen -> Int -> CityMap -> (CityMap, gen)
 simulate = undefined
 
--- Computes one iteration of the simulation, returning the resulting city map as well
--- as the applied alien moves.
-step :: RandomGen gen => gen -> CityMap -> (CityMap, Moves, gen)
-step rng m = (step', mvs, rng') where
-  (mvs, rng') = moves rng m
-  step' = foldr mv m mvs
+-- Returns the given city map with the given alien moves applied.
+step :: CityMap -> Moves -> CityMap
+step = foldr mv where
   add alien (City n p ns) = City n (p `union` [alien]) ns
   del alien (City n p ns) = City n (p \\      [alien]) ns
   mv (from, alien, (_, to)) m' = Map.adjust (add alien) to $
@@ -48,7 +45,6 @@ moves rng m = (Map.fromList $ zip (alien <$> moves') moves', rng') where
   rng' = last $ snd <$> mvs
   mvs = move rng <$> cities
   cities = Map.elems m
-
 
 -- | Returns an alien move from a given city.
 move :: RandomGen gen => gen -> City -> (Maybe Move, gen)
