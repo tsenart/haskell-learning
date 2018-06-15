@@ -3,6 +3,7 @@ module Main where
 import Control.Exception (IOException)
 import Control.Exception.Base (catch)
 import Data.Maybe (catMaybes)
+import Data.Foldable (foldl')
 import System.Random (RandomGen, randomR, next)
 import System.Random.Shuffle (shuffle')
 import Data.List (union, (\\))
@@ -17,7 +18,7 @@ type Neighborhood = [Neighbour]
 type Alien        = Int
 type Population   = [Alien]
 type Move         = (CityName, Alien, Neighbour)
-type Moves        = Map.Map Alien Move
+type Moves        = Map.Map Alien [Move]
 data City         = City CityName Population Neighborhood deriving (Show, Eq, Ord)
 type CityMap      = Map.Map CityName City
 
@@ -27,23 +28,24 @@ type CityMap      = Map.Map CityName City
 -- | Simulates an invasion of an alien population with max number of individual alien moves.
 -- Assumes the given city map is already populated.
 simulate :: RandomGen gen => gen -> Int -> CityMap -> (CityMap, gen)
-simulate = undefined
+simulate rng maxMoves m = undefined
 
 -- Returns the given city map with the given alien moves applied.
 step :: CityMap -> Moves -> CityMap
-step = foldr mv where
+step = foldl' $ foldl' mv where
   add alien (City n p ns) = City n (p `union` [alien]) ns
   del alien (City n p ns) = City n (p \\      [alien]) ns
-  mv (from, alien, (_, to)) m' = Map.adjust (add alien) to $
+  mv m' (from, alien, (_, to)) = Map.adjust (add alien) to $
                                  Map.adjust (del alien) from m'
 
 -- | Generates a list of alien moves from a given city map.
 moves :: RandomGen gen => gen -> CityMap -> (Moves, gen)
-moves rng m = (Map.fromList $ zip (alien <$> moves') moves', rng') where
+moves rng m = (Map.fromList $ zip aliens ((:[]) <$> moves'), rng') where
   alien (_, alien', _) = alien'
+  aliens = alien <$> moves'
   moves' = catMaybes $ fst <$> mvs
-  rng' = last $ snd <$> mvs
-  mvs = move rng <$> cities
+  rng'   = last $ snd <$> mvs
+  mvs    = move rng <$> cities
   cities = Map.elems m
 
 -- | Returns an alien move from a given city.
