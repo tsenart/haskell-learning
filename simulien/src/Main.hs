@@ -14,9 +14,10 @@ data Direction    = North | East | South | West deriving (Show, Eq, Ord)
 type CityName     = T.Text
 type Neighbour    = (Direction, CityName)
 type Neighborhood = [Neighbour]
-type Alien        = (Int, Int)
+type Alien        = Int
 type Population   = [Alien]
-type Move         = (CityName, Population, Neighbour)
+type Move         = (CityName, Alien, Neighbour)
+type Moves        = Map.Map Alien Move
 data City         = City CityName Population Neighborhood deriving (Show, Eq, Ord)
 type CityMap      = Map.Map CityName City
 
@@ -30,24 +31,32 @@ simulate = undefined
 
 -- Computes one iteration of the simulation, returning the resulting city map as well
 -- as the applied alien moves.
-step :: RandomGen gen => gen -> Int -> CityMap -> (CityMap, [Move], gen)
-step rng _ m = (step', moves', rng') where
-  (moves', rng') = moves rng m
-  step' = foldr adjust m moves'
-  add p (City n p' ns) = City n (p' `union` p) ns
-  del p (City n p' ns) = City n (p' \\ p) ns
-  adjust (from, p, (_, to)) m' = Map.adjust (add p) to $
-                                 Map.adjust (del p) from m'
+step :: RandomGen gen => gen -> CityMap -> (CityMap, Moves, gen)
+step rng m = (step', mvs, rng') where
+  (mvs, rng') = moves rng m
+  step' = foldr mv m mvs
+  add alien (City n p ns) = City n (p `union` [alien]) ns
+  del alien (City n p ns) = City n (p \\      [alien]) ns
+  mv (from, alien, (_, to)) m' = Map.adjust (add alien) to $
+                                 Map.adjust (del alien) from m'
 
 -- | Generates a list of alien moves from a given city map.
-moves :: RandomGen gen => gen -> CityMap -> ([Move], gen)
-moves rng m = (catMaybes $ fst <$> moves', last $ snd <$> moves') where
-  moves' = move <$> Map.elems m
-  move (City _ [] _) = (Nothing, rng)
-  move (City _ _ []) = (Nothing, rng)
-  move (City n p ns) = (Just (n, [alien], neighbour), rng') where
-    (alien, _)        = pick rng p
-    (neighbour, rng') = pick rng ns
+moves :: RandomGen gen => gen -> CityMap -> (Moves, gen)
+moves rng m = (Map.fromList $ zip (alien <$> moves') moves', rng') where
+  alien (_, alien', _) = alien'
+  moves' = catMaybes $ fst <$> mvs
+  rng' = last $ snd <$> mvs
+  mvs = move rng <$> cities
+  cities = Map.elems m
+
+
+-- | Returns an alien move from a given city.
+move :: RandomGen gen => gen -> City -> (Maybe Move, gen)
+move rng (City _ [] _) = (Nothing, rng)
+move rng (City _ _ []) = (Nothing, rng)
+move rng (City n p ns) = (Just (n, alien, neighbour), rng') where
+  (alien, _)        = pick rng p
+  (neighbour, rng') = pick rng ns
 
 pick :: RandomGen gen => gen -> [a] -> (a, gen)
 pick rng xs = (xs !! i, rng') where
