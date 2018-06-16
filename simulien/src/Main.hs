@@ -1,12 +1,12 @@
 module Main where
 
-import Control.Exception (IOException)
-import Control.Exception.Base (catch)
 import Data.Maybe (catMaybes)
 import Data.Foldable (foldl')
-import System.Random (RandomGen, randomR, next)
+import System.Random (RandomGen, randomR, next, mkStdGen)
 import System.Random.Shuffle (shuffle')
-import Data.List (union, (\\))
+import System.Environment (getArgs)
+import System.Exit (die)
+import Data.List ((\\))
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -22,23 +22,30 @@ type Moves        = Map.Map Alien [Move]
 data City         = City CityName Population Neighborhood deriving (Show, Eq, Ord)
 type CityMap      = Map.Map CityName City
 
--- TODO Find data structure that sorts cities by number of remaining aliens. Heap?
--- TODO Terminate simulation when max moves are reached per alien
-
 -- | Simulates an invasion of an alien population with max number of individual alien moves.
--- Assumes the given city map is already populated.
 simulate :: RandomGen gen => gen -> Int -> CityMap -> (CityMap, gen)
-simulate rng maxMoves m = undefined
+simulate rng limit m = step (moves rng m) limit Map.empty m
+
+-- | Advances the simulation until no more moves are possible or all aliens have
+-- moved at least limit times.
+step :: RandomGen gen => (Moves, gen) -> Int -> Moves -> CityMap -> (CityMap, gen)
+step (smvs, rng) limit mvs cm
+  | null smvs = (cm, rng)
+  | not (null mvs) && all ((>= limit) . length) mvs = (cm, rng)
+  | otherwise = step (moves rng cm') limit mvs' cm'
+  where cm'  = apply cm smvs
+        mvs' = Map.unionWith (++) mvs smvs
 
 -- Returns the given city map with the given alien moves applied.
-step :: CityMap -> Moves -> CityMap
-step = foldl' $ foldl' mv where
-  add alien (City n p ns) = City n (p `union` [alien]) ns
-  del alien (City n p ns) = City n (p \\      [alien]) ns
-  mv m' (from, alien, (_, to)) = Map.adjust (add alien) to $
+apply :: CityMap -> Moves -> CityMap
+apply = foldl' $ foldl' mv where
+  add alien (City n [] ns) = Just $ City n [alien] ns
+  add _ _ = Nothing -- Alien fight! City destroyed.
+  del alien (City n p ns)  = City n (p \\ [alien]) ns
+  mv m' (from, alien, (_, to)) = Map.update (add alien) to $
                                  Map.adjust (del alien) from m'
 
--- | Generates a list of alien moves from a given city map.
+-- | Generates possible alien moves from a given city map.
 moves :: RandomGen gen => gen -> CityMap -> (Moves, gen)
 moves rng m = (Map.fromList $ zip aliens ((:[]) <$> moves'), rng') where
   alien (_, alien', _) = alien'
@@ -52,9 +59,9 @@ moves rng m = (Map.fromList $ zip aliens ((:[]) <$> moves'), rng') where
 move :: RandomGen gen => gen -> City -> (Maybe Move, gen)
 move rng (City _ [] _) = (Nothing, rng)
 move rng (City _ _ []) = (Nothing, rng)
-move rng (City n p ns) = (Just (n, alien, neighbour), rng') where
-  (alien, _)        = pick rng p
-  (neighbour, rng') = pick rng ns
+move rng (City n p ns) = (Just (n, alien, neighbour), rng'') where
+  (alien,     rng')  = pick rng  p
+  (neighbour, rng'') = pick rng' ns
 
 pick :: RandomGen gen => gen -> [a] -> (a, gen)
 pick rng xs = (xs !! i, rng') where
@@ -72,13 +79,6 @@ populate rng p m = (Map.fromListWith merge $ zip names populated, snd $ next rng
 
 cityName :: City -> CityName
 cityName (City n _ _ ) = n
-
--- | Reads a city map from a file.
-cityMapFromFile :: FilePath -> IO (Either String CityMap)
-cityMapFromFile fp = fmap parseCityMap <$> try' (TIO.readFile fp) where
-  try' a = (Right <$> a) `catch` err
-  err :: IOException -> IO (Either String T.Text)
-  err = return . Left . show
 
 -- | Parses a city map from a new line separated list of cities.
 parseCityMap :: T.Text -> CityMap
@@ -108,5 +108,30 @@ parseDirection t = case T.toLower t of
   "west"  -> Just West
   _       -> Nothing
 
+encodeCityMap :: CityMap -> T.Text
+encodeCityMap m = T.unlines (encodeCity <$> Map.elems m)
+
+encodeCity :: City -> T.Text
+encodeCity (City n _ ns) = T.unwords (n : (encodeNeighbour <$> ns))
+
+cityDestroyed :: City -> T.Text
+cityDestroyed (City n p _) = T.pack $ show n ++ " has been destroyed by " ++ show p
+
+encodeNeighbour :: Neighbour -> T.Text
+encodeNeighbour (dir, name) = T.concat [T.pack $ show dir, "=", name]
+
+run :: Int -> Int -> IO ()
+run seed population = do
+  input <- TIO.getContents
+  let cm = parseCityMap input
+  let rng = mkStdGen seed
+  let (populated, rng') = populate rng [1..population] cm
+  let (cm', _) = simulate rng' 10000 populated
+  TIO.putStr $ encodeCityMap cm'
+
 main :: IO ()
-main = undefined
+main = do
+  args <- getArgs
+  case args of
+    [seed, population] -> run (read seed :: Int) (read population :: Int)
+    _                  -> die "Usage: simulien <seed> <population>"
