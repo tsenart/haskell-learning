@@ -141,15 +141,15 @@ encodeCityMap :: CityMap -> T.Text
 encodeCityMap m = T.unlines (encodeCity m <$> Map.elems m)
 
 encodeCity :: CityMap -> City -> T.Text
-encodeCity cm (City n _ ns) = T.unwords (n : (encodeNeighbour cm <$> ns))
+encodeCity cm (City n _ ns) = T.unwords (n : catMaybes (encodeNeighbour cm <$> ns))
 
 cityDestroyed :: City -> T.Text
 cityDestroyed (City n p _) = T.pack $ show n ++ " has been destroyed by aliens " ++ show p
 
-encodeNeighbour :: CityMap -> Neighbour -> T.Text
+encodeNeighbour :: CityMap -> Neighbour -> Maybe T.Text
 encodeNeighbour cm (dir, name)
-  | Map.member name cm = T.concat [T.pack $ show dir, "=", name]
-  | otherwise = ""
+  | Map.member name cm = Just $ T.concat [T.pack $ show dir, "=", name]
+  | otherwise = Nothing
 
 run :: Int -> Int -> IO ()
 run seed population = do
