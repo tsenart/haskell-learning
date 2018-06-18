@@ -1,10 +1,10 @@
 module Main where
 
 import Data.Maybe (catMaybes)
-import Data.Foldable (foldl')
-import System.Random (RandomGen, randomR, next, mkStdGen)
-import System.Random.Shuffle (shuffle')
+import System.Random (StdGen, randomR, mkStdGen)
+import System.Random.Shuffle (shuffle)
 import System.Environment (getArgs)
+import System.IO (stderr)
 import System.Exit (die)
 import Data.List (union, (\\))
 import qualified Data.Map.Strict as Map
@@ -18,68 +18,93 @@ type Neighborhood = [Neighbour]
 type Alien        = Int
 type Population   = [Alien]
 type Move         = (CityName, Alien, Neighbour)
-type Moves        = Map.Map Alien [Move]
+type Counts       = Map.Map Alien Int
 data City         = City CityName Population Neighborhood deriving (Show, Eq, Ord)
 type CityMap      = Map.Map CityName City
 
 -- | Simulates an invasion of an alien population with max number of individual alien moves.
-simulate :: RandomGen gen => gen -> Int -> CityMap -> (CityMap, gen)
-simulate rng limit m = step (moves rng m) limit Map.empty m
+simulate :: StdGen -> Population -> Int -> CityMap -> (CityMap, [City], StdGen)
+simulate rng population limit cm = step (moves rng' populated) limit counts [] populated
+  where
+    (populated, rng') = populate rng population cm
+    counts = Map.fromList $ zip population $ repeat 0
 
 -- | Advances the simulation until no more moves are possible or all aliens have
 -- moved at least limit times.
-step :: RandomGen gen => (Moves, gen) -> Int -> Moves -> CityMap -> (CityMap, gen)
-step (smvs, rng) limit mvs cm
-  | null smvs = (cm, rng)
-  | not (null mvs) && all ((>= limit) . length) mvs = (cm, rng)
-  | otherwise = step (moves rng cm') limit mvs' cm'
-  where cm'  = fight $ apply cm smvs
-        mvs' = Map.unionWith (++) mvs smvs
+step :: ([Move], StdGen) -> Int -> Counts -> [City] -> CityMap -> (CityMap, [City], StdGen)
+step ([], rng) _ _ destroyed cm = (cm, destroyed, rng)
+step (mv : _, rng) limit counts destroyed cm
+  | not (null counts) && all (>= limit) counts = (cm, destroyed, rng)
+  | otherwise = step (moves rng cm') limit (inc mv counts) (destroyed ++ gone) cm'
+  where (cm', gone) = fight $ apply cm mv
+        inc (_, alien, _) = Map.adjust (+1) alien
 
--- Evaluates and destroys the cities which have more than one alien in them.
-fight :: CityMap -> CityMap
-fight = Map.filter crowded where
+-- Evaluates and destroys the cities which have more than one alien in them,
+-- returning the resulting CityMap and the list of destroyed cities.
+fight :: CityMap -> (CityMap, [City])
+fight cm = (survivors, Map.elems destroyed) where
+  (destroyed, survivors) = Map.partition crowded cm
   crowded (City _ p _) = length p > 1
 
--- Returns the given city map with the given alien moves applied.
-apply :: CityMap -> Moves -> CityMap
-apply = foldl' $ foldl' mv where
-  add alien (City n p ns) = City n (p `union` [alien]) ns
-  del alien (City n p ns) = City n (p \\      [alien]) ns
-  mv m' (from, alien, (_, to)) = Map.adjust (add alien) to $
-                                 Map.adjust (del alien) from m'
+-- Returns the given city map with the given alien move applied to the
+-- corresponding city. Calling code must ensure the target city exists in
+-- the map.
+apply :: CityMap -> Move -> CityMap
+apply cm (from, alien, (_, to)) = Map.adjust (add alien) to $
+                                  Map.adjust (del alien) from cm
 
--- | Generates possible alien moves from a given city map.
-moves :: RandomGen gen => gen -> CityMap -> (Moves, gen)
-moves rng m = (Map.fromList $ zip aliens ((:[]) <$> moves'), rng') where
-  alien (_, alien', _) = alien'
-  aliens = alien <$> moves'
+-- Add and delete alien population from a given city.
+add, del :: Alien -> City -> City
+add alien (City n p ns) = City n (p `union` [alien]) ns
+del alien (City n p ns) = City n (p \\      [alien]) ns
+
+-- | StdGenerates possible alien moves from a given city map.
+moves :: StdGen -> CityMap -> ([Move], StdGen)
+moves rng m = shuffle' rng' moves' where
   moves' = catMaybes $ fst <$> mvs
   rng'   = last $ snd <$> mvs
   mvs    = move rng <$> cities
   cities = Map.elems m
 
 -- | Returns an alien move from a given city.
-move :: RandomGen gen => gen -> City -> (Maybe Move, gen)
+move :: StdGen -> City -> (Maybe Move, StdGen)
 move rng (City _ [] _) = (Nothing, rng)
 move rng (City _ _ []) = (Nothing, rng)
-move rng (City n p ns) = (Just (n, alien, neighbour), rng'') where
-  (alien,     rng')  = pick rng  p
-  (neighbour, rng'') = pick rng' ns
+move rng (City n p ns) = (Just (n, head p', head ns'), rng'') where
+  (p', rng')   = shuffle' rng p
+  (ns', rng'') = shuffle' rng' ns
 
-pick :: RandomGen gen => gen -> [a] -> (a, gen)
-pick rng xs = (xs !! i, rng') where
-  (i, rng') = randomR (0, length xs - 1) rng
+-- | Shuffles a list of things, given a RNG.
+-- From: https://wiki.haskell.org/Random_shuffle
+shuffle' :: StdGen -> [a] -> ([a], StdGen)
+shuffle' rng [] = ([], rng)
+shuffle' rng xs = (shuffle xs rseq', rng') where
+  (rseq', rng') = rseq (length xs) rng
+
+-- The sequence (r1,...r[n-1]) of numbers such that r[i] is an
+-- independent sample from a uniform random distribution
+-- [0..n-i]
+rseq :: Int -> StdGen -> ([Int], StdGen)
+rseq n rng
+  | null seq' = ([], rng)
+  | otherwise = (fst <$> init seq', last $ snd <$> seq')
+  where
+    seq' = rseq' (n - 1) rng
+    rseq' :: Int -> StdGen -> [(Int, StdGen)]
+    rseq' 0 g = [(0, g)]
+    rseq' i g = (j, g) : rseq' (i - 1) g' where
+      (j, g') = randomR (0, i) g
 
 -- | Populates a CityMap with the given Population placed at random cities.
-populate :: RandomGen gen => gen -> Population -> CityMap -> (CityMap, gen)
-populate rng p m = (Map.fromListWith merge $ zip names populated, snd $ next rng) where
+populate :: StdGen -> Population -> CityMap -> (CityMap, StdGen)
+populate rng p m = (Map.fromListWith merge $ zip names populated, rng') where
   merge (City name lp ns) (City _ rp _) = City name (lp ++ rp) ns
   names = cityName <$> cities
   populated = zipWith join population cities
   population = [[alien] | alien <- p] ++ replicate (length m - length p) []
   join aliens (City n p' ns) = City n (aliens ++ p') ns
-  cities = cycle $ shuffle' (Map.elems m) (length m) rng
+  cities = cycle cities'
+  (cities', rng') = shuffle' rng $ Map.elems m
 
 cityName :: City -> CityName
 cityName (City n _ _ ) = n
@@ -113,24 +138,26 @@ parseDirection t = case T.toLower t of
   _       -> Nothing
 
 encodeCityMap :: CityMap -> T.Text
-encodeCityMap m = T.unlines (encodeCity <$> Map.elems m)
+encodeCityMap m = T.unlines (encodeCity m <$> Map.elems m)
 
-encodeCity :: City -> T.Text
-encodeCity (City n _ ns) = T.unwords (n : (encodeNeighbour <$> ns))
+encodeCity :: CityMap -> City -> T.Text
+encodeCity cm (City n _ ns) = T.unwords (n : (encodeNeighbour cm <$> ns))
 
 cityDestroyed :: City -> T.Text
-cityDestroyed (City n p _) = T.pack $ show n ++ " has been destroyed by " ++ show p
+cityDestroyed (City n p _) = T.pack $ show n ++ " has been destroyed by aliens " ++ show p
 
-encodeNeighbour :: Neighbour -> T.Text
-encodeNeighbour (dir, name) = T.concat [T.pack $ show dir, "=", name]
+encodeNeighbour :: CityMap -> Neighbour -> T.Text
+encodeNeighbour cm (dir, name)
+  | Map.member name cm = T.concat [T.pack $ show dir, "=", name]
+  | otherwise = ""
 
 run :: Int -> Int -> IO ()
 run seed population = do
   input <- TIO.getContents
   let cm = parseCityMap input
   let rng = mkStdGen seed
-  let (populated, rng') = populate rng [1..population] cm
-  let (cm', _) = simulate rng' 10000 populated
+  let (cm', destroyed, _) = simulate rng [1..population] 10000 cm
+  TIO.hPutStr stderr $ T.unlines $ cityDestroyed <$> destroyed
   TIO.putStr $ encodeCityMap cm'
 
 main :: IO ()
