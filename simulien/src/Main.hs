@@ -6,7 +6,7 @@ import System.Random (RandomGen, randomR, next, mkStdGen)
 import System.Random.Shuffle (shuffle')
 import System.Environment (getArgs)
 import System.Exit (die)
-import Data.List ((\\))
+import Data.List (union, (\\))
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -33,16 +33,20 @@ step (smvs, rng) limit mvs cm
   | null smvs = (cm, rng)
   | not (null mvs) && all ((>= limit) . length) mvs = (cm, rng)
   | otherwise = step (moves rng cm') limit mvs' cm'
-  where cm'  = apply cm smvs
+  where cm'  = fight $ apply cm smvs
         mvs' = Map.unionWith (++) mvs smvs
+
+-- Evaluates and destroys the cities which have more than one alien in them.
+fight :: CityMap -> CityMap
+fight = Map.filter crowded where
+  crowded (City _ p _) = length p > 1
 
 -- Returns the given city map with the given alien moves applied.
 apply :: CityMap -> Moves -> CityMap
 apply = foldl' $ foldl' mv where
-  add alien (City n [] ns) = Just $ City n [alien] ns
-  add _ _ = Nothing -- Alien fight! City destroyed.
-  del alien (City n p ns)  = City n (p \\ [alien]) ns
-  mv m' (from, alien, (_, to)) = Map.update (add alien) to $
+  add alien (City n p ns) = City n (p `union` [alien]) ns
+  del alien (City n p ns) = City n (p \\      [alien]) ns
+  mv m' (from, alien, (_, to)) = Map.adjust (add alien) to $
                                  Map.adjust (del alien) from m'
 
 -- | Generates possible alien moves from a given city map.
