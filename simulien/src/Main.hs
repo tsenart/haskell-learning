@@ -39,7 +39,7 @@ step (mv : _, rng) limit counts destroyed cm
   where (cm', gone) = fight $ apply cm mv
         inc (_, alien, _) = Map.adjust (+1) alien
 
--- Destroys a city if it has more than one alien in it.:nohl
+-- Destroys a city if it has more than one alien in it.
 fight :: (Maybe City, CityMap) -> (CityMap, [City])
 fight (Nothing                   , cm) = (cm, [])  -- No city, no fight.
 fight (Just(City _ [] _)         , cm) = (cm, [])  -- No aliens, no fight.
