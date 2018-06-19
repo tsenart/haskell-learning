@@ -24,8 +24,8 @@ type CityMap      = Map.Map CityName City
 
 -- | Simulates an invasion of an alien population with max number of individual alien moves.
 simulate :: StdGen -> Population -> Int -> CityMap -> (CityMap, [City], StdGen)
-simulate rng population limit cm = step (moves rng' populated) limit counts [] populated
-  where
+simulate rng population limit cm = (survivors, destroyed, rng'') where
+    (survivors, destroyed, rng'') = step (moves rng' populated) limit counts [] populated
     (populated, rng') = populate rng population cm
     counts = Map.fromList $ zip population $ repeat 0
 
@@ -39,24 +39,28 @@ step (mv : _, rng) limit counts destroyed cm
   where (cm', gone) = fight $ apply cm mv
         inc (_, alien, _) = Map.adjust (+1) alien
 
--- Evaluates and destroys the cities which have more than one alien in them,
--- returning the resulting CityMap and the list of destroyed cities.
-fight :: CityMap -> (CityMap, [City])
-fight cm = (survivors, Map.elems destroyed) where
-  (destroyed, survivors) = Map.partition crowded cm
-  crowded (City _ p _) = length p > 1
+-- Destroys a city if it has more than one alien in it.:nohl
+fight :: (Maybe City, CityMap) -> (CityMap, [City])
+fight (Nothing                   , cm) = (cm, [])  -- No city, no fight.
+fight (Just(City _ [] _)         , cm) = (cm, [])  -- No aliens, no fight.
+fight (Just(City _ [_] _)        , cm) = (cm, [])  -- One alien, no fight.
+fight (Just(c@(City n (_:_:_) _)), cm) = (Map.delete n cm, [c]) -- Two or more aliens, fight.
 
 -- Returns the given city map with the given alien move applied to the
 -- corresponding city. Calling code must ensure the target city exists in
 -- the map.
-apply :: CityMap -> Move -> CityMap
-apply cm (from, alien, (_, to)) = Map.adjust (add alien) to $
+apply :: CityMap -> Move -> (Maybe City, CityMap)
+apply cm (from, alien, (_, to)) = Map.updateLookupWithKey (add alien) to $
                                   Map.adjust (del alien) from cm
 
--- Add and delete alien population from a given city.
-add, del :: Alien -> City -> City
-add alien (City n p ns) = City n (p `union` [alien]) ns
-del alien (City n p ns) = City n (p \\      [alien]) ns
+
+-- Delete an alien from a given city.
+del :: Alien -> City -> City
+del alien (City n p ns) = City n (p \\ [alien]) ns
+
+-- Add an alien to a given city.
+add :: Alien -> CityName -> City -> Maybe City
+add alien _ (City n p ns) = Just $ City n (p `union` [alien]) ns
 
 -- | StdGenerates possible alien moves from a given city map.
 moves :: StdGen -> CityMap -> ([Move], StdGen)
